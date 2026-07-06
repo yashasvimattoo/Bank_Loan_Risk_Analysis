@@ -209,6 +209,32 @@ LIMIT 20;
 
 -- FINAL  RISK SCORING MODEL
 
+WITH scored AS (
+    SELECT
+        loan_id,
+        age,
+        income,
+        loan_amount,
+        credit_score,
+        employment_type,
+        defaulted,
+        ROUND(
+            ((900 - credit_score) / 600.0 * 100 * 0.40) +
+            (LEAST((loan_amount / NULLIF(income, 0)) * 10, 100) * 0.35) +
+            (CASE
+                WHEN age < 25 THEN 70
+                WHEN age > 60 THEN 60
+                ELSE 30
+            END * 0.15) +
+            (CASE
+                WHEN employment_type = 'Unemployed'   THEN 100
+                WHEN employment_type = 'Part-time'    THEN 60
+                WHEN employment_type = 'Self-employed' THEN 40
+                ELSE 20
+            END * 0.10)
+        , 2) AS risk_score
+    FROM loans
+)
 SELECT
     loan_id,
     age,
@@ -217,64 +243,15 @@ SELECT
     credit_score,
     employment_type,
     defaulted,
-
-    ROUND(
-        ((900 - credit_score) / 600.0 * 100 * 0.40) +
-
-        (LEAST((loan_amount / NULLIF(income,0)) * 10, 100) * 0.35) +
-
-        ((CASE
-            WHEN age < 25 THEN 70
-            WHEN age > 60 THEN 60
-            ELSE 30
-        END) * 0.15) +
-
-        ((CASE
-            WHEN employment_type = 'Unemployed' THEN 100
-            WHEN employment_type = 'Part-time' THEN 60
-            WHEN employment_type = 'Self-employed' THEN 40
-            ELSE 20
-        END) * 0.10)
-
-    ,2) AS risk_score,
-
+    risk_score,
     CASE
-        WHEN ROUND(
-            ((900 - credit_score) / 600.0 * 100 * 0.40) +
-            (LEAST((loan_amount / NULLIF(income,0)) * 10, 100) * 0.35) +
-            ((CASE
-                WHEN age < 25 THEN 70
-                WHEN age > 60 THEN 60
-                ELSE 30
-            END) * 0.15) +
-            ((CASE
-                WHEN employment_type = 'Unemployed' THEN 100
-                WHEN employment_type = 'Part-time' THEN 60
-                WHEN employment_type = 'Self-employed' THEN 40
-                ELSE 20
-            END) * 0.10)
-        ,2) >= 65 THEN 'HIGH RISK'
-
-        WHEN ROUND(
-            ((900 - credit_score) / 600.0 * 100 * 0.40) +
-            (LEAST((loan_amount / NULLIF(income,0)) * 10, 100) * 0.35) +
-            ((CASE
-                WHEN age < 25 THEN 70
-                WHEN age > 60 THEN 60
-                ELSE 30
-            END) * 0.15) +
-            ((CASE
-                WHEN employment_type = 'Unemployed' THEN 100
-                WHEN employment_type = 'Part-time' THEN 60
-                WHEN employment_type = 'Self-employed' THEN 40
-                ELSE 20
-            END) * 0.10)
-        ,2) >= 40 THEN 'MEDIUM RISK'
-
-        ELSE 'LOW RISK'
+        WHEN (loan_amount / NULLIF(income, 0)) >= 10 THEN 'HIGH RISK'
+        WHEN credit_score < 400                      THEN 'HIGH RISK'
+        WHEN risk_score >= 65                        THEN 'HIGH RISK'
+        WHEN risk_score >= 40                        THEN 'MEDIUM RISK'
+        ELSE                                              'LOW RISK'
     END AS risk_label
-
-FROM loans
+FROM scored
 ORDER BY risk_score DESC
 LIMIT 20;
 -- Applicants with very low credit scores, unemployment status, and high loan amounts receive the highest risk scores.
@@ -282,98 +259,53 @@ LIMIT 20;
 -- This rule-based model can help lenders prioritize high-risk applications for manual review before loan approval.
 
 -- export
-CREATE VIEW loan_risk_analysis AS
-
+CREATE OR REPLACE VIEW loan_risk_analysis AS
+WITH scored AS (
+    SELECT
+        loan_id, age, income, loan_amount, loan_purpose,
+        tenure_months, credit_score, employment_type, defaulted,
+        CASE
+            WHEN age BETWEEN 18 AND 25 THEN '18-25'
+            WHEN age BETWEEN 26 AND 35 THEN '26-35'
+            WHEN age BETWEEN 36 AND 45 THEN '36-45'
+            WHEN age BETWEEN 46 AND 60 THEN '46-60'
+            ELSE '60+'
+        END AS age_group,
+        CASE
+            WHEN credit_score < 500 THEN 'Very Poor'
+            WHEN credit_score < 600 THEN 'Poor'
+            WHEN credit_score < 700 THEN 'Fair'
+            WHEN credit_score < 800 THEN 'Good'
+            ELSE 'Excellent'
+        END AS credit_band,
+        ROUND(
+            ((900 - credit_score) / 600.0 * 100 * 0.40) +
+            (LEAST((loan_amount / NULLIF(income, 0)) * 10, 100) * 0.35) +
+            (CASE
+                WHEN age < 25 THEN 70
+                WHEN age > 60 THEN 60
+                ELSE 30
+            END * 0.15) +
+            (CASE
+                WHEN employment_type = 'Unemployed'    THEN 100
+                WHEN employment_type = 'Part-time'     THEN 60
+                WHEN employment_type = 'Self-employed' THEN 40
+                ELSE 20
+            END * 0.10)
+        , 2) AS risk_score
+    FROM loans
+)
 SELECT
-    loan_id,
-    age,
-    income,
-    loan_amount,
-    loan_purpose,
-    tenure_months,
-    credit_score,
-    employment_type,
-    defaulted,
-
+    *,
     CASE
-        WHEN age BETWEEN 18 AND 25 THEN '18-25'
-        WHEN age BETWEEN 26 AND 35 THEN '26-35'
-        WHEN age BETWEEN 36 AND 45 THEN '36-45'
-        WHEN age BETWEEN 46 AND 60 THEN '46-60'
-        ELSE '60+'
-    END AS age_group,
-
-    CASE
-        WHEN credit_score < 500 THEN 'Very Poor'
-        WHEN credit_score < 600 THEN 'Poor'
-        WHEN credit_score < 700 THEN 'Fair'
-        WHEN credit_score < 800 THEN 'Good'
-        ELSE 'Excellent'
-    END AS credit_band,
-
-    ROUND(
-        ((900 - credit_score) / 600.0 * 100 * 0.40) +
-
-        (LEAST((loan_amount / NULLIF(income,0)) * 10,100) * 0.35) +
-
-        ((CASE
-            WHEN age < 25 THEN 70
-            WHEN age > 60 THEN 60
-            ELSE 30
-        END) * 0.15) +
-
-        ((CASE
-            WHEN employment_type='Unemployed' THEN 100
-            WHEN employment_type='Part-time' THEN 60
-            WHEN employment_type='Self-employed' THEN 40
-            ELSE 20
-        END) * 0.10)
-
-    ,2) AS risk_score,
-
-    CASE
-        WHEN ROUND(
-            ((900 - credit_score) / 600.0 * 100 * 0.40) +
-            (LEAST((loan_amount / NULLIF(income,0)) * 10,100) * 0.35) +
-
-            ((CASE
-                WHEN age < 25 THEN 70
-                WHEN age > 60 THEN 60
-                ELSE 30
-            END) * 0.15) +
-
-            ((CASE
-                WHEN employment_type='Unemployed' THEN 100
-                WHEN employment_type='Part-time' THEN 60
-                WHEN employment_type='Self-employed' THEN 40
-                ELSE 20
-            END) * 0.10)
-
-        ,2) >= 65 THEN 'HIGH RISK'
-
-        WHEN ROUND(
-            ((900 - credit_score) / 600.0 * 100 * 0.40) +
-            (LEAST((loan_amount / NULLIF(income,0)) * 10,100) * 0.35) +
-
-            ((CASE
-                WHEN age < 25 THEN 70
-                WHEN age > 60 THEN 60
-                ELSE 30
-            END) * 0.15) +
-
-            ((CASE
-                WHEN employment_type='Unemployed' THEN 100
-                WHEN employment_type='Part-time' THEN 60
-                WHEN employment_type='Self-employed' THEN 40
-                ELSE 20
-            END) * 0.10)
-
-        ,2) >= 40 THEN 'MEDIUM RISK'
-
-        ELSE 'LOW RISK'
+        WHEN (loan_amount / NULLIF(income, 0)) >= 10 THEN 'HIGH RISK'
+        WHEN credit_score < 400                      THEN 'HIGH RISK'
+        WHEN risk_score >= 65                        THEN 'HIGH RISK'
+        WHEN risk_score >= 40                        THEN 'MEDIUM RISK'
+        ELSE                                              'LOW RISK'
     END AS risk_label
+FROM scored;
 
-FROM loans;
 SELECT * FROM loan_risk_analysis
 ORDER BY RAND()
 LIMIT 10000;
